@@ -257,6 +257,18 @@ export default function ChatPage() {
   const [fallbackToast, setFallbackToast] = useState<Reminder | null>(null);
   useEffect(() => installRejectionGuard(), []);
 
+  const [probeResetAt, setProbeResetAt] = useState<number | null>(null);
+  useEffect(() => {
+    fetch("/api/chat/status")
+      .then((response) => response.json())
+      .then((data: { limited?: boolean; resetAt?: number }) => {
+        if (data.limited && typeof data.resetAt === "number") {
+          setProbeResetAt(data.resetAt);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     const unsubscribe = subscribeToReminders(() => {
       setReminders(loadReminders());
@@ -305,7 +317,13 @@ export default function ChatPage() {
     ? extractRateLimitReset(lastAssistantMessage.metadata)
     : null;
   const rateLimitReset =
-    lastReset !== null && lastReset > Date.now() ? lastReset : null;
+    (lastReset !== null && lastReset > Date.now()) ||
+    (probeResetAt !== null && probeResetAt > Date.now())
+      ? Math.max(
+          lastReset !== null && lastReset > Date.now() ? lastReset : 0,
+          probeResetAt !== null && probeResetAt > Date.now() ? probeResetAt : 0
+        )
+      : null;
 
   const empty = messages.length === 0;
   const hasError = Boolean(error);
