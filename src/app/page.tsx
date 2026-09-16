@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import {
   ArrowUpRight,
+  Bell,
   Building2,
   ChevronDown,
   CircleAlert,
@@ -15,6 +16,15 @@ import { ChatInput } from "@/components/ChatInput";
 import { UsageBadge, type TokenUsage } from "@/components/UsageBadge";
 import { QuantessaMark } from "@/components/QuantessaMark";
 import { ReportDialog } from "@/components/ReportDialog";
+import { ReminderDialog } from "@/components/ReminderDialog";
+import {
+  ensureServiceWorker,
+  loadReminders,
+  setFallbackNotifier,
+  subscribeToReminders,
+  syncReminders,
+  type Reminder,
+} from "@/lib/reminders";
 
 const divisions = [
   "Marketing",
@@ -233,7 +243,29 @@ export default function ChatPage() {
   const { messages, sendMessage, status, stop, error, regenerate } = useChat();
 
   const [reportOpen, setReportOpen] = useState(false);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [fallbackToast, setFallbackToast] = useState<Reminder | null>(null);
   useEffect(() => installRejectionGuard(), []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToReminders(() => {
+      setReminders(loadReminders());
+    });
+    setReminders(loadReminders());
+    setFallbackNotifier((reminder) => setFallbackToast(reminder));
+    void ensureServiceWorker().then(() => syncReminders());
+    return () => {
+      unsubscribe();
+      setFallbackNotifier(null);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (fallbackToast === null) return;
+    const timer = setTimeout(() => setFallbackToast(null), 6000);
+    return () => clearTimeout(timer);
+  }, [fallbackToast]);
 
   const isStreaming = status === "streaming" || status === "submitted";
   const isReady = Boolean(name.trim() && division);
@@ -305,6 +337,19 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() => setReminderOpen(true)}
+            aria-label={`Reminders (${reminders.length} pending)`}
+            className="relative flex items-center gap-1.5 rounded-full border border-[#e9e8f2] bg-[#fafafe] px-3 py-2 text-xs text-[#67677b] transition hover:border-[#d9d4f5] hover:text-[#5a4bc0]"
+          >
+            <Bell className="size-3.5" /> Reminders
+            {reminders.length > 0 && (
+              <span className="flex size-4 items-center justify-center rounded-full bg-[#7666d7] text-[9px] font-semibold text-white">
+                {reminders.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setReportOpen(true)}
             className="flex items-center gap-1.5 rounded-full border border-[#e9e8f2] bg-[#fafafe] px-3 py-2 text-xs text-[#67677b] transition hover:border-[#d9d4f5] hover:text-[#5a4bc0]"
           >
@@ -323,6 +368,12 @@ export default function ChatPage() {
         userName={name}
         division={division}
         company={COMPANY}
+      />
+
+      <ReminderDialog
+        open={reminderOpen}
+        onClose={() => setReminderOpen(false)}
+        reminders={reminders}
       />
 
       <section className="flex flex-1 flex-col justify-between overflow-hidden px-6 pt-10 sm:px-10 sm:pt-14">
@@ -399,6 +450,17 @@ onSend={() => {
           </div>
         </div>
       </section>
+
+      {fallbackToast && (
+        <div className="fixed bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-2xl border border-[#dfe8dd] bg-[#f3f8f2] px-4 py-3 text-center text-xs text-[#2f5a2c] shadow-lg shadow-[#151526]/10">
+          <Bell className="mx-auto mb-1 size-4" />
+          <p className="font-semibold">{fallbackToast.title}</p>
+          <p className="mt-0.5 text-[11px] text-[#6b8f68]">
+            Reminder here on-screen — enable OS notifications for a native
+            alert.
+          </p>
+        </div>
+      )}
     </main>
   );
 }
