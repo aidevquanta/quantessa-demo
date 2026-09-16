@@ -250,9 +250,11 @@ function buildRetryingResponse(
       controller.enqueue(
         encoder.encode(
           `data: ${JSON.stringify({
-            type: "error",
-            errorText:
-              "The model provider is temporarily busy. Please try again in a moment.",
+            type: "text-delta",
+            textDelta: "The model provider is temporarily busy. Please try again in a moment.",
+          })}\n\ndata: ${JSON.stringify({
+            type: "finish",
+            finishReason: "stop",
           })}\n\ndata: [DONE]\n\n`
         )
       );
