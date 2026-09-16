@@ -1,11 +1,20 @@
 "use client";
 
-import { useRef } from "react";
-import { FileText, Image, Paperclip, Send, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertCircle,
+  FileText,
+  Image,
+  Paperclip,
+  Send,
+  UploadCloud,
+  X,
+} from "lucide-react";
 
 const ACCEPTED_TYPES = [
   "text/plain",
   "text/csv",
+  "application/json",
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "image/jpeg",
@@ -48,12 +57,28 @@ export function ChatInput({
   onFilesChange,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [rejectedFiles, setRejectedFiles] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (rejectedFiles.length === 0) return;
+    const timer = setTimeout(() => setRejectedFiles([]), 5000);
+    return () => clearTimeout(timer);
+  }, [rejectedFiles]);
 
   const addFiles = (incoming: FileList | File[]) => {
     const next = [...files];
+    const rejected: string[] = [];
     for (const file of Array.from(incoming)) {
-      if (!ACCEPTED_TYPES.includes(file.type)) continue;
-      if (next.length >= MAX_ATTACHMENTS) break;
+      if (!ACCEPTED_TYPES.includes(file.type)) {
+        rejected.push(file.name);
+        continue;
+      }
+      if (next.length >= MAX_ATTACHMENTS) {
+        rejected.push(file.name);
+        continue;
+      }
       if (
         !next.some(
           (existing) =>
@@ -64,6 +89,32 @@ export function ChatInput({
       }
     }
     onFilesChange(next);
+    if (rejected.length > 0) setRejectedFiles(rejected);
+  };
+
+  const handleDropZone = (event: React.DragEvent) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragging(false);
+    const dropped = Array.from(event.dataTransfer.files);
+    if (dropped.length > 0) addFiles(dropped);
+  };
+
+  const handleDragEnter = (event: React.DragEvent) => {
+    event.preventDefault();
+    if (!event.dataTransfer.types.includes("Files")) return;
+    dragDepthRef.current += 1;
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragging(false);
+  };
+
+  const handleDragOver = (event: React.DragEvent) => {
+    event.preventDefault();
   };
 
   const handlePaste = (event: React.ClipboardEvent) => {
@@ -79,12 +130,39 @@ export function ChatInput({
   };
 
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div
+      className="group relative mx-auto w-full max-w-5xl"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDropZone}
+    >
+      {rejectedFiles.length > 0 && (
+        <div
+          role="status"
+          className="mb-2 flex items-center gap-2 rounded-lg border border-[#f3d0d4] bg-[#fdf3f4] px-3 py-2 text-xs text-[#c75866]"
+        >
+          <AlertCircle className="size-3.5 shrink-0" />
+          <span>
+            {rejectedFiles.length === 1
+              ? `"${rejectedFiles[0]}" is not a supported file.`
+              : "Some files are not supported: "}
+            {rejectedFiles.length > 1 &&
+              rejectedFiles.slice(0, 2).map((name) => `"${name}"`).join(", ") +
+                (rejectedFiles.length > 2
+                  ? ` +${rejectedFiles.length - 2} more`
+                  : "")}
+            {" "}Accepted: PDF, DOCX, TXT, CSV, or images (JPG, PNG, WebP, GIF) up to{" "}
+            {MAX_ATTACHMENTS} files.
+          </span>
+        </div>
+      )}
+
       {files.length > 0 && (
         <div className="mb-2 flex flex-wrap items-center gap-2">
           {files.map((file) => (
             <span
-              key={file.name}
+              key={`${file.name}-${file.size}`}
               className="flex items-center gap-1.5 rounded-lg border border-[#e9e8f2] bg-[#fbfbfd] px-2.5 py-1.5 text-xs text-[#67677b]"
             >
               <FormatIcon type={file.type} />
@@ -107,6 +185,15 @@ export function ChatInput({
         </div>
       )}
 
+      {isDragging && (
+        <div className="pointer-events-none absolute inset-0 -mt-1 flex items-center justify-center rounded-2xl border-2 border-dashed border-[#7666d7] bg-[#7666d7]/5">
+          <span className="flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-medium text-[#7666d7] shadow-sm">
+            <UploadCloud className="size-4" />
+            Drop files to attach
+          </span>
+        </div>
+      )}
+
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -116,7 +203,11 @@ export function ChatInput({
             onSend();
           }
         }}
-        className="flex items-center gap-2 rounded-2xl border border-[#e9e8f2] bg-[#fbfbfd] p-2 shadow-sm"
+        className={`flex items-center gap-2 rounded-2xl border bg-[#fbfbfd] p-2 shadow-sm transition-colors ${
+          isDragging
+            ? "border-[#7666d7] ring-2 ring-[#7666d7]/15"
+            : "border-[#e9e8f2]"
+        }`}
       >
         <input
           ref={fileInputRef}
@@ -155,6 +246,9 @@ export function ChatInput({
           {isStreaming ? <StopIcon /> : <Send data-icon="inline-start" />}
         </button>
       </form>
+      <p className="mt-1.5 text-center text-[10px] uppercase tracking-[0.18em] text-[#aaa9ba]">
+        Drag &amp; drop files here &nbsp;·&nbsp; up to {MAX_ATTACHMENTS} per message
+      </p>
     </div>
   );
 }
