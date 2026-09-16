@@ -248,16 +248,17 @@ function buildRetryingResponse(
       }
 
       controller.enqueue(
-        encoder.encode(
-          `data: ${JSON.stringify({
-            type: "text-delta",
-            textDelta: "The model provider is temporarily busy. Please try again in a moment.",
-          })}\n\ndata: ${JSON.stringify({
-            type: "finish",
-            finishReason: "stop",
-          })}\n\ndata: [DONE]\n\n`
-        )
-      );
+          encoder.encode(
+            `data: ${JSON.stringify({
+              type: "text-delta",
+              textDelta:
+                "Quantessa is currently busy — please try again in a moment. This is a limited demo version, so responses may be slow or unavailable during peak usage.",
+            })}\n\ndata: ${JSON.stringify({
+              type: "finish",
+              finishReason: "stop",
+            })}\n\ndata: [DONE]\n\n`
+          )
+        );
       controller.close();
     },
   });
