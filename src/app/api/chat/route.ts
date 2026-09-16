@@ -196,127 +196,161 @@ function buildRetryingResponse(
 
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
+      const enqueueText = (text: string) =>
+        controller.enqueue(encoder.encode(text));
+
       let rateLimit: { resetAt: number } | null = null;
+      const deadline = Date.now() + 24000;
+
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         if (abort.signal.aborted) {
           controller.close();
           return;
         }
+        if (Date.now() > deadline) break;
 
         let resolveError: ((err: unknown) => void) | null = null;
         const errorSignal = new Promise<unknown>((resolve) => {
           resolveError = resolve;
         });
-        const result = streamText({
-          model: openrouter(MODEL_ENDPOINT),
-          system,
-          messages,
-          maxRetries: 1,
-          onError: (err) => {
-            const wrapped = err as { error?: unknown };
-            resolveError?.(wrapped?.error ?? err);
-          },
-          onFinish: ({ usage }) => {
-            try {
-              console.log(
-                `[quantessa] attempt ${attempt} complete — input: ${usage.inputTokens} tokens, output: ${usage.outputTokens} tokens, total: ${usage.totalTokens} tokens`
-              );
-            } catch {
-              /* log only */
-            }
-          },
-        });
-
-        const uiResponse = result.toUIMessageStreamResponse({
-          messageMetadata: ({ part }) =>
-            part.type === "finish" && part.totalUsage
-              ? { usage: part.totalUsage }
-              : undefined,
-        });
-
-        const reader = uiResponse.body!.getReader();
-        const decoder = new TextDecoder();
-        const buffered: Uint8Array[] = [];
-        let scan = "";
-        let textSeen = false;
-        let sawError = false;
-        let committed = false;
-        let readerDone = false;
-        let attemptError: unknown = null;
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              readerDone = true;
-              break;
-            }
-
-            buffered.push(value);
-
-            if (!committed) {
-              scan = (scan + decoder.decode(value, { stream: true })).slice(
-                -8000
-              );
-              if (!sawError && /"type":"text-delta"/.test(scan)) {
-                textSeen = true;
-              }
-              if (/\"type\":\"error\"/.test(scan) ||
-                  /"finishReason":"error"/.test(scan)) {
-                sawError = true;
-                const streamError = await Promise.race([
-                  errorSignal,
-                  new Promise<undefined>((resolve) =>
-                    setTimeout(() => resolve(undefined), 6000)
-                  ),
-                ]);
-                const captured = detectRateLimit(streamError);
-                if (captured) {
-                  rateLimit = captured;
-                  break;
-                }
-              }
-              if (textSeen && !sawError) {
-                committed = true;
-              }
-            }
-
-            if (committed) {
-              for (const chunk of buffered) controller.enqueue(chunk);
-              buffered.length = 0;
-            }
-          }
-
-          if (rateLimit) break;
-
-          if (committed || (!sawError && readerDone)) {
-            for (const chunk of buffered) controller.enqueue(chunk);
-            controller.close();
-            return;
-          }
-
-          // Failed before any text — try the next attempt.
-          await reader.cancel().catch(() => {});
-        } catch (err) {
-          attemptError = err;
-          if (committed) {
-            controller.error(err);
-            return;
-          }
-          const streamError = await Promise.race([
+        const timeToError = () =>
+          Promise.race([
             errorSignal,
             new Promise<undefined>((resolve) =>
               setTimeout(() => resolve(undefined), 6000)
             ),
           ]);
-          const rateLimited = detectRateLimit(streamError) ?? detectRateLimit(err);
-          if (rateLimited) {
-            rateLimit = rateLimited;
-            await reader.cancel().catch(() => {});
-            break;
+
+        let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+        let committed = false;
+        let gracefulDone = false;
+        let forcedEarly = false;
+
+        try {
+          const result = streamText({
+            model: openrouter(MODEL_ENDPOINT),
+            system,
+            messages,
+            maxRetries: 1,
+            onError: (err) => {
+              const wrapped = err as { error?: unknown };
+              resolveError?.(wrapped?.error ?? err);
+            },
+            onFinish: ({ usage }) => {
+              try {
+                console.log(
+                  `[quantessa] attempt ${attempt} complete — input: ${usage.inputTokens} tokens, output: ${usage.outputTokens} tokens, total: ${usage.totalTokens} tokens`
+                );
+              } catch {
+                /* log only */
+              }
+            },
+          });
+
+          const uiResponse = result.toUIMessageStreamResponse({
+            messageMetadata: ({ part }) =>
+              part.type === "finish" && part.totalUsage
+                ? { usage: part.totalUsage }
+                : undefined,
+          });
+
+          reader = uiResponse.body!.getReader();
+          const decoder = new TextDecoder();
+          let pending = "";
+
+          outer: while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            pending += decoder.decode(value, { stream: true });
+
+            while (pending.includes("\n\n")) {
+              const sep = pending.indexOf("\n\n");
+              const rawEvent = pending.slice(0, sep);
+              pending = pending.slice(sep + 2);
+              const trimmed = rawEvent.trim();
+              if (!trimmed.startsWith("data:")) continue;
+
+              const payloadStr = trimmed.slice(5).trim();
+              if (payloadStr === "[DONE]") continue;
+
+              let payload: Record<string, unknown>;
+              try {
+                payload = JSON.parse(payloadStr);
+              } catch {
+                continue;
+              }
+
+              const isError =
+                payload.type === "error" ||
+                payload.finishReason === "error";
+
+              if (isError) {
+                if (committed) {
+                  forcedEarly = true;
+                  break outer;
+                }
+                const streamError = await timeToError();
+                const captured = detectRateLimit(streamError);
+                if (captured) {
+                  rateLimit = captured;
+                }
+                break outer;
+              }
+
+              if (payload.type === "text-delta") committed = true;
+              enqueueText(rawEvent + "\n\n");
+
+              if (payload.type === "finish") {
+                gracefulDone = true;
+                break outer;
+              }
+            }
           }
-          await reader.cancel().catch(() => {});
+        } catch (err) {
+          if (!committed) {
+            const streamError = await timeToError();
+            const rateLimited =
+              detectRateLimit(streamError) ?? detectRateLimit(err);
+            if (rateLimited) {
+              rateLimit = rateLimited;
+              await reader?.cancel().catch(() => {});
+            }
+          }
+          await reader?.cancel().catch(() => {});
+          if (committed) forcedEarly = true;
         }
+
+        if (rateLimit) break;
+
+        if (forcedEarly) {
+          enqueueText(
+            `data: ${JSON.stringify({
+              type: "text-delta",
+              textDelta:
+                "(Quantessa's connection dropped mid-answer — please send your message again in a moment.)",
+            })}\n\ndata: ${JSON.stringify({
+              type: "finish",
+              finishReason: "stop",
+            })}\n\ndata: [DONE]\n\n`
+          );
+          controller.close();
+          return;
+        }
+
+        if (gracefulDone) {
+          enqueueText(`data: [DONE]\n\n`);
+          controller.close();
+          return;
+        }
+
+        if (committed) {
+          controller.close();
+          return;
+        }
+
+        // No text committed and no rate limit — try the next attempt.
+        await reader?.cancel().catch(() => {});
       }
 
 const deliveredText = rateLimit
