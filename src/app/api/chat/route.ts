@@ -1,9 +1,9 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { streamText, type CoreMessage } from "ai";
-import { PDFParse } from "pdf-parse";
 import { getDefaultAgentConfig, MODEL_ENDPOINT } from "@/lib/agent/config";
 
 export const maxDuration = 30;
+export const runtime = "nodejs";
 
 const IMAGE_MIME_TYPES = [
   "image/jpeg",
@@ -54,6 +54,7 @@ async function extractTextFile(part: RawPart): Promise<string | null> {
       return buffer.toString("utf8");
     }
     if (mime === "application/pdf") {
+      const { PDFParse } = await import("pdf-parse");
       const parser = new PDFParse({ data: buffer });
       try {
         const result = await parser.getText();
@@ -145,26 +146,129 @@ const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
+const MAX_ATTEMPTS = 4;
+
+const encoder = new TextEncoder();
+
+function buildRetryingResponse(
+  system: string,
+  messages: CoreMessage[]
+): Response {
+  const abort = new AbortController();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        if (abort.signal.aborted) {
+          controller.close();
+          return;
+        }
+
+        const result = streamText({
+          model: openrouter(MODEL_ENDPOINT),
+          system,
+          messages,
+          maxRetries: 1,
+          onFinish: ({ usage }) => {
+            try {
+              console.log(
+                `[quantessa] attempt ${attempt} complete — input: ${usage.inputTokens} tokens, output: ${usage.outputTokens} tokens, total: ${usage.totalTokens} tokens`
+              );
+            } catch {
+              /* log only */
+            }
+          },
+        });
+
+        const uiResponse = result.toUIMessageStreamResponse({
+          messageMetadata: ({ part }) =>
+            part.type === "finish" && part.totalUsage
+              ? { usage: part.totalUsage }
+              : undefined,
+        });
+
+        const reader = uiResponse.body!.getReader();
+        const decoder = new TextDecoder();
+        const buffered: Uint8Array[] = [];
+        let scan = "";
+        let textSeen = false;
+        let sawError = false;
+        let committed = false;
+        let readerDone = false;
+        let attemptError: unknown = null;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              readerDone = true;
+              break;
+            }
+
+            buffered.push(value);
+
+            if (!committed) {
+              scan = (scan + decoder.decode(value, { stream: true })).slice(
+                -2000
+              );
+              if (!sawError && /"type":"text-delta"/.test(scan)) {
+                textSeen = true;
+              }
+              if (/\"type\":\"error\"/.test(scan) ||
+                  /"finishReason":"error"/.test(scan)) {
+                sawError = true;
+              }
+              if (textSeen && !sawError) {
+                committed = true;
+              }
+            }
+
+            if (committed) {
+              for (const chunk of buffered) controller.enqueue(chunk);
+              buffered.length = 0;
+            }
+          }
+
+          if (committed || (!sawError && readerDone)) {
+            for (const chunk of buffered) controller.enqueue(chunk);
+            controller.close();
+            return;
+          }
+
+          // Failed before any text — try the next attempt.
+          await reader.cancel().catch(() => {});
+        } catch (err) {
+          attemptError = err;
+          if (committed) {
+            controller.error(err);
+            return;
+          }
+          await reader.cancel().catch(() => {});
+        }
+      }
+
+      controller.enqueue(
+        encoder.encode(
+          `data: ${JSON.stringify({
+            type: "error",
+            errorText:
+              "The model provider is temporarily busy. Please try again in a moment.",
+          })}\n\ndata: [DONE]\n\n`
+        )
+      );
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+}
+
 export async function POST(req: Request) {
   const { messages, division, userName } = await req.json();
   const { systemPrompt } = getDefaultAgentConfig({ division, userName });
   const coreMessages = await toCoreMessages(messages as RawMessage[]);
 
-  const result = streamText({
-    model: openrouter(MODEL_ENDPOINT),
-    system: systemPrompt,
-    messages: coreMessages,
-    onFinish: ({ usage }) => {
-      console.log(
-        `[quantessa] request complete — input: ${usage.inputTokens} tokens, output: ${usage.outputTokens} tokens, total: ${usage.totalTokens} tokens`
-      );
-    },
-  });
-
-  return result.toUIMessageStreamResponse({
-    messageMetadata: ({ part }) =>
-      part.type === "finish" && part.totalUsage
-        ? { usage: part.totalUsage }
-        : undefined,
-  });
+  return buildRetryingResponse(systemPrompt, coreMessages);
 }
