@@ -27,6 +27,20 @@ export default {
       letterSpacing: {
         wide: "0.12em",
       },
+      keyframes: {
+        quantessaBounce: {
+          "0%, 80%, 100%": { transform: "translateY(0)", opacity: "0.35" },
+          "40%": { transform: "translateY(-3px)", opacity: "1" },
+        },
+        fadeInUp: {
+          from: { opacity: "0", transform: "translateY(6px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        quantessaBounce: "quantessaBounce 1.2s ease-in-out infinite",
+        fadeInUp: "fadeInUp 0.35s ease-out both",
+      },
     },
   },
   plugins: [],

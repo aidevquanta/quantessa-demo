@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import {
   ArrowUpRight,
@@ -264,6 +264,18 @@ export default function ChatPage() {
   const empty = messages.length === 0;
   const hasError = Boolean(error);
 
+  const lastMessage = messages[messages.length - 1] ?? null;
+  const thinkingActive =
+    isStreaming && (lastMessage === null || lastMessage.role !== "assistant");
+
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (empty) return;
+    const node = listRef.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+  }, [displayMessages.length, thinkingActive, empty]);
+
   if (view === "gate") {
     return (
       <Gate
@@ -338,8 +350,11 @@ export default function ChatPage() {
             </div>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto">
-            <MessageList messages={displayMessages} />
+          <div ref={listRef} className="flex-1 overflow-y-auto">
+            <MessageList
+              messages={displayMessages}
+              thinking={thinkingActive}
+            />
           </div>
         )}
 
