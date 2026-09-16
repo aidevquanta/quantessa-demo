@@ -150,6 +150,44 @@ const MAX_ATTEMPTS = 4;
 
 const encoder = new TextEncoder();
 
+function detectRateLimit(err: unknown): { resetAt: number } | null {
+  if (err == null || typeof err !== "object") return null;
+
+  const candidates: unknown[] = [];
+  const anyErr = err as { errors?: unknown[] };
+  if (Array.isArray(anyErr.errors)) candidates.push(...anyErr.errors);
+  candidates.push(err);
+
+  for (const candidate of candidates) {
+    if (candidate == null || typeof candidate !== "object") continue;
+    const item = candidate as {
+      statusCode?: number;
+      message?: string;
+      responseBody?: string;
+    };
+    const isRateLimit =
+      item.statusCode === 429 ||
+      (typeof item.message === "string" &&
+        /rate limit|free-models-per-day/i.test(item.message));
+    if (!isRateLimit) continue;
+
+    let resetAt = 0;
+    if (typeof item.responseBody === "string") {
+      try {
+        const parsed = JSON.parse(item.responseBody) as {
+          error?: { metadata?: { headers?: Record<string, string> } };
+        };
+        const reset = parsed.error?.metadata?.headers?.["X-RateLimit-Reset"];
+        if (reset) resetAt = Number(reset);
+      } catch {
+        /* ignore unparseable bodies */
+      }
+    }
+    return { resetAt: Number.isFinite(resetAt) && resetAt > 0 ? resetAt : 0 };
+  }
+  return null;
+}
+
 function buildRetryingResponse(
   system: string,
   messages: CoreMessage[]
@@ -158,17 +196,26 @@ function buildRetryingResponse(
 
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
+      let rateLimit: { resetAt: number } | null = null;
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         if (abort.signal.aborted) {
           controller.close();
           return;
         }
 
+        let resolveError: ((err: unknown) => void) | null = null;
+        const errorSignal = new Promise<unknown>((resolve) => {
+          resolveError = resolve;
+        });
         const result = streamText({
           model: openrouter(MODEL_ENDPOINT),
           system,
           messages,
           maxRetries: 1,
+          onError: (err) => {
+            const wrapped = err as { error?: unknown };
+            resolveError?.(wrapped?.error ?? err);
+          },
           onFinish: ({ usage }) => {
             try {
               console.log(
@@ -209,7 +256,7 @@ function buildRetryingResponse(
 
             if (!committed) {
               scan = (scan + decoder.decode(value, { stream: true })).slice(
-                -2000
+                -8000
               );
               if (!sawError && /"type":"text-delta"/.test(scan)) {
                 textSeen = true;
@@ -217,6 +264,17 @@ function buildRetryingResponse(
               if (/\"type\":\"error\"/.test(scan) ||
                   /"finishReason":"error"/.test(scan)) {
                 sawError = true;
+                const streamError = await Promise.race([
+                  errorSignal,
+                  new Promise<undefined>((resolve) =>
+                    setTimeout(() => resolve(undefined), 6000)
+                  ),
+                ]);
+                const captured = detectRateLimit(streamError);
+                if (captured) {
+                  rateLimit = captured;
+                  break;
+                }
               }
               if (textSeen && !sawError) {
                 committed = true;
@@ -228,6 +286,8 @@ function buildRetryingResponse(
               buffered.length = 0;
             }
           }
+
+          if (rateLimit) break;
 
           if (committed || (!sawError && readerDone)) {
             for (const chunk of buffered) controller.enqueue(chunk);
@@ -243,22 +303,45 @@ function buildRetryingResponse(
             controller.error(err);
             return;
           }
+          const streamError = await Promise.race([
+            errorSignal,
+            new Promise<undefined>((resolve) =>
+              setTimeout(() => resolve(undefined), 6000)
+            ),
+          ]);
+          const rateLimited = detectRateLimit(streamError) ?? detectRateLimit(err);
+          if (rateLimited) {
+            rateLimit = rateLimited;
+            await reader.cancel().catch(() => {});
+            break;
+          }
           await reader.cancel().catch(() => {});
         }
       }
 
+const deliveredText = rateLimit
+        ? "Quantessa is currently busy with too many users at once — please try again in a little while. This is a free-tier demo, so usage is limited each day."
+        : "Quantessa is currently busy — please try again in a moment. This is a limited demo version, so responses may be slow or unavailable during peak usage.";
+
+      const finishPart: Record<string, unknown> = {
+        type: "finish",
+        finishReason: "stop",
+      };
+      if (rateLimit) {
+        finishPart.messageMetadata = {
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          rateLimitReset: rateLimit.resetAt,
+        };
+      }
+
       controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({
-              type: "text-delta",
-              textDelta:
-                "Quantessa is currently busy — please try again in a moment. This is a limited demo version, so responses may be slow or unavailable during peak usage.",
-            })}\n\ndata: ${JSON.stringify({
-              type: "finish",
-              finishReason: "stop",
-            })}\n\ndata: [DONE]\n\n`
-          )
-        );
+        encoder.encode(
+          `data: ${JSON.stringify({
+            type: "text-delta",
+            textDelta: deliveredText,
+          })}\n\ndata: ${JSON.stringify(finishPart)}\n\ndata: [DONE]\n\n`
+        )
+      );
       controller.close();
     },
   });

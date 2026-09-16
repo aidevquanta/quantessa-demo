@@ -17,6 +17,7 @@ import { UsageBadge, type TokenUsage } from "@/components/UsageBadge";
 import { QuantessaMark } from "@/components/QuantessaMark";
 import { ReportDialog } from "@/components/ReportDialog";
 import { ReminderDialog } from "@/components/ReminderDialog";
+import { RateLimitBanner } from "@/components/RateLimitBanner";
 import {
   ensureServiceWorker,
   loadReminders,
@@ -88,6 +89,13 @@ function extractUsage(metadata: unknown): TokenUsage | null {
     return obj.usage as TokenUsage;
   }
   return null;
+}
+
+function extractRateLimitReset(metadata: unknown): number | null {
+  if (metadata == null || typeof metadata !== "object") return null;
+  const obj = metadata as Record<string, unknown>;
+  if (typeof obj.rateLimitReset !== "number") return null;
+  return obj.rateLimitReset;
 }
 
 function Gate({
@@ -292,6 +300,11 @@ export default function ChatPage() {
   const usage = lastAssistantMessage
     ? extractUsage(lastAssistantMessage.metadata)
     : null;
+  const lastReset = lastAssistantMessage
+    ? extractRateLimitReset(lastAssistantMessage.metadata)
+    : null;
+  const rateLimitReset =
+    lastReset !== null && lastReset > Date.now() ? lastReset : null;
 
   const empty = messages.length === 0;
   const hasError = Boolean(error);
@@ -335,19 +348,6 @@ export default function ChatPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setReminderOpen(true)}
-            aria-label={`Reminders (${reminders.length} pending)`}
-            className="relative flex items-center gap-1.5 rounded-full border border-[#e9e8f2] bg-[#fafafe] px-3 py-2 text-xs text-[#67677b] transition hover:border-[#d9d4f5] hover:text-[#5a4bc0]"
-          >
-            <Bell className="size-3.5" /> Reminders
-            {reminders.length > 0 && (
-              <span className="flex size-4 items-center justify-center rounded-full bg-[#7666d7] text-[9px] font-semibold text-white">
-                {reminders.length}
-              </span>
-            )}
-          </button>
           <button
             type="button"
             onClick={() => setReportOpen(true)}
@@ -394,9 +394,24 @@ export default function ChatPage() {
                 from questions to clear next steps — research, drafting,
                 analysis, proposals, reports, and everyday work.
               </p>
-              <div className="mt-8 flex items-center gap-2 text-sm text-[#8a879e]">
-                <CircleCheck className="text-[#7b65e8]" /> Your profile is set
-                up
+              <div className="mt-8 flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2 text-sm text-[#8a879e]">
+                  <CircleCheck className="text-[#7b65e8]" /> Your profile is
+                  set up
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReminderOpen(true)}
+                  aria-label={`Reminders (${reminders.length} pending)`}
+                  className="relative flex items-center gap-1.5 rounded-full border border-[#e9e8f2] bg-[#fafafe] px-3.5 py-2 text-sm text-[#67677b] transition hover:border-[#d9d4f5] hover:text-[#5a4bc0]"
+                >
+                  <Bell className="size-3.5" /> Reminders
+                  {reminders.length > 0 && (
+                    <span className="flex size-4 items-center justify-center rounded-full bg-[#7666d7] text-[9px] font-semibold text-white">
+                      {reminders.length}
+                    </span>
+                  )}
+                </button>
               </div>
             </div>
           </div>
@@ -410,6 +425,9 @@ export default function ChatPage() {
         )}
 
         <div className="mt-10 shrink-0 pb-6">
+          {rateLimitReset !== null && (
+            <RateLimitBanner resetAt={rateLimitReset} />
+          )}
           {hasError && (
             <div className="mb-3 flex items-center justify-center gap-3 text-xs text-[#c75866]">
               <span>Something went wrong while answering.</span>
