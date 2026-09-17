@@ -150,6 +150,26 @@ const MAX_ATTEMPTS = 4;
 
 const encoder = new TextEncoder();
 
+async function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number
+): Promise<{ done: boolean; value: Uint8Array } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const readPromise = reader.read().then(
+    (result): { done: boolean; value: Uint8Array } =>
+      result.done
+        ? { done: true, value: new Uint8Array() }
+        : { done: false, value: result.value ?? new Uint8Array() },
+    () => ({ done: true, value: new Uint8Array() })
+  );
+  return Promise.race([
+    readPromise,
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 function detectRateLimit(err: unknown): { resetAt: number } | null {
   if (err == null || typeof err !== "object") return null;
 
@@ -190,9 +210,11 @@ function detectRateLimit(err: unknown): { resetAt: number } | null {
 
 function buildRetryingResponse(
   system: string,
-  messages: CoreMessage[]
+  messages: CoreMessage[],
+  reqSignal?: AbortSignal | null
 ): Response {
   const abort = new AbortController();
+  reqSignal?.addEventListener("abort", () => abort.abort(), { once: true });
 
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -225,6 +247,7 @@ function buildRetryingResponse(
         let committed = false;
         let gracefulDone = false;
         let forcedEarly = false;
+        let stalled = false;
 
         try {
           const result = streamText({
@@ -259,7 +282,16 @@ function buildRetryingResponse(
           let pending = "";
 
           outer: while (true) {
-            const { done, value } = await reader.read();
+            const frame = await readWithTimeout(
+              reader!,
+              Math.max(0, deadline - Date.now())
+            );
+            if (frame === null) {
+              stalled = true;
+              await reader?.cancel().catch(() => {});
+              break outer;
+            }
+            const { done, value } = frame;
             if (done) break;
 
             pending += decoder.decode(value, { stream: true });
@@ -320,6 +352,8 @@ function buildRetryingResponse(
           await reader?.cancel().catch(() => {});
           if (committed) forcedEarly = true;
         }
+
+        if (stalled && committed) forcedEarly = true;
 
         if (rateLimit) break;
 
@@ -390,5 +424,5 @@ export async function POST(req: Request) {
   const { systemPrompt } = getDefaultAgentConfig({ division, userName });
   const coreMessages = await toCoreMessages(messages as RawMessage[]);
 
-  return buildRetryingResponse(systemPrompt, coreMessages);
+  return buildRetryingResponse(systemPrompt, coreMessages, req.signal);
 }

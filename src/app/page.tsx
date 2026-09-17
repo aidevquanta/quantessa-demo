@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import {
   ArrowUpRight,
@@ -13,7 +13,11 @@ import {
 } from "lucide-react";
 import { MessageList, type DisplayMessage } from "@/components/MessageList";
 import { ChatInput } from "@/components/ChatInput";
-import { UsageBadge, type TokenUsage } from "@/components/UsageBadge";
+import {
+  UsageBadge,
+  type TokenUsage,
+  type FreeQuota,
+} from "@/components/UsageBadge";
 import { QuantessaMark } from "@/components/QuantessaMark";
 import { ReportDialog } from "@/components/ReportDialog";
 import { ReminderDialog } from "@/components/ReminderDialog";
@@ -257,16 +261,29 @@ export default function ChatPage() {
   useEffect(() => installRejectionGuard(), []);
 
   const [probeResetAt, setProbeResetAt] = useState<number | null>(null);
-  useEffect(() => {
+  const [quota, setQuota] = useState<FreeQuota | null>(null);
+
+  const refreshStatus = useCallback(() => {
     fetch("/api/chat/status")
       .then((response) => response.json())
-      .then((data: { limited?: boolean; resetAt?: number }) => {
-        if (data.limited && typeof data.resetAt === "number") {
-          setProbeResetAt(data.resetAt);
+      .then(
+        (data: {
+          limited?: boolean;
+          resetAt?: number;
+          quota?: FreeQuota | null;
+        }) => {
+          if (data.limited && typeof data.resetAt === "number") {
+            setProbeResetAt(data.resetAt);
+          }
+          setQuota(data.quota ?? null);
         }
-      })
+      )
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshStatus();
+  }, [refreshStatus]);
 
   useEffect(() => {
     const unsubscribe = subscribeToReminders(() => {
@@ -309,6 +326,7 @@ export default function ChatPage() {
 
   const lastAssistantMessage =
     [...messages].reverse().find((m) => m.role === "assistant") ?? null;
+  const lastAssistantId = lastAssistantMessage?.id;
   const usage = lastAssistantMessage
     ? extractUsage(lastAssistantMessage.metadata)
     : null;
@@ -323,6 +341,10 @@ export default function ChatPage() {
           probeResetAt !== null && probeResetAt > Date.now() ? probeResetAt : 0
         )
       : null;
+
+  useEffect(() => {
+    if (lastAssistantId) refreshStatus();
+  }, [lastAssistantId, refreshStatus]);
 
   const empty = messages.length === 0;
   const hasError = Boolean(error);
@@ -457,7 +479,7 @@ export default function ChatPage() {
               </button>
             </div>
           )}
-          <UsageBadge usage={usage} />
+          <UsageBadge usage={usage} quota={quota} />
           <div className="mt-2">
             <ChatInput
               value={input}
