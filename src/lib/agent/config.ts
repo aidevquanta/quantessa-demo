@@ -12,13 +12,12 @@ import kotaInnovistaKnowledge from "./knowledge/kota-innovista";
  *
  * Swap to a paid model by changing this single value — no application
  * code changes needed. Example paid model: "anthropic/claude-3.5-sonnet".
- * Temporary pick: the free Nemotron 3 Super (text-only) — swapped from the
- * multimodal Nano Omni to evaluate a stronger reasoning model. Note: this
- * model is text-only, so image/file-picture attachments are unsupported
- * while it is active. To restore multimodal attachment support, switch back
- * to "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free".
+ * Current pick: the free Nemotron 3 Nano Omni (multimodal), so image
+ * attachments are supported. Text-only alternative on the free tier:
+ * "nvidia/nemotron-3-super-120b-a12b:free".
  */
-export const MODEL_ENDPOINT = "nvidia/nemotron-3-super-120b-a12b:free";
+export const MODEL_ENDPOINT =
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
 
 /* ---------- Domain identity (fixed layer) ---------- */
 

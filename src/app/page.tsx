@@ -18,7 +18,6 @@ import { QuantessaMark } from "@/components/QuantessaMark";
 import { ReportDialog } from "@/components/ReportDialog";
 import { ReminderDialog } from "@/components/ReminderDialog";
 import { RateLimitBanner } from "@/components/RateLimitBanner";
-import { ModelReadyNotice } from "@/components/ModelReadyNotice";
 import {
   ensureServiceWorker,
   loadReminders,
@@ -485,7 +484,6 @@ onSend={() => {
                 onFilesChange={setFiles}
               />
           </div>
-          {rateLimitReset !== null && <ModelReadyNotice resetAt={rateLimitReset} />}
         </div>
       </section>
 

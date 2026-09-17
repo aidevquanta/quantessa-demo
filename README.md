@@ -57,7 +57,7 @@ src/
 Edit the single constant in `src/lib/agent/config.ts`:
 
 ```ts
-export const MODEL_ENDPOINT = "nvidia/nemotron-3-super-120b-a12b:free";
+export const MODEL_ENDPOINT = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
 ```
 
 Swap to any OpenRouter-supported model (e.g. a paid Claude or GPT model)
