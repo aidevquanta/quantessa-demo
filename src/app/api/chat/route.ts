@@ -150,6 +150,11 @@ const MAX_ATTEMPTS = 4;
 
 const STALL_TIMEOUT = 45_000;
 
+// Hard ceiling on reply length (concise, user-friendly answers; also keeps
+// generation time and token spend bounded). The system prompt keeps normal
+// replies far under this — the cap only catches runaway responses.
+const MAX_OUTPUT_TOKENS = 1024;
+
 const encoder = new TextEncoder();
 
 async function readWithTimeout(
@@ -254,6 +259,7 @@ function buildRetryingResponse(
             model: openrouter(MODEL_ENDPOINT),
             system,
             messages,
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
             maxRetries: 1,
             onError: (err) => {
               const wrapped = err as { error?: unknown };

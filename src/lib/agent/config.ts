@@ -50,6 +50,15 @@ Use your judgement: turn vague requests into useful outputs, ask only when a gen
   },
 };
 
+/* ---------- Response style (fixed layer) ---------- */
+
+const RESPONSE_STYLE = `\n---\n\nRESPONSE STYLE:
+- Be brief. Answer in the fewest words that fully answer the question — most answers fit in 3-8 short sentences or a small list. No padded intros or closings.
+- Put the direct answer first, then only the detail that earns its place. Skip repeats, hedging, and polite filler.
+- Use headings, tables, or long bullet lists only when they genuinely make the answer easier to scan; otherwise keep it prose and short.
+- For a draft (email, memo, brief, proposal, report): deliver one tight, ready-to-use version. Do not offer several alternatives; invite a follow-up if they want it longer or adjusted.
+- If a request is vague or could balloon into a huge output, give the leanest useful version and ask what to expand — do not guess at a long document.`;
+
 /* ---------- Company registry (swappable knowledge layer) ---------- */
 
 type CompanyConfig = {
@@ -112,6 +121,7 @@ export function buildAgentConfig(
     company.knowledge,
     `\n---\n\n${useCase.instructions}`,
     sessionContext,
+    RESPONSE_STYLE,
     `\n---\n\nIMPORTANT RULES:
 - If you do not know a specific price, unit count, timeline, or completion date, say so plainly: "That detail is not currently available in my information."
 - Always offer to connect the person with the ${company.name} team for specifics.
