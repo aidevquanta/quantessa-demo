@@ -2,7 +2,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { streamText, type CoreMessage } from "ai";
 import { getDefaultAgentConfig, MODEL_ENDPOINT } from "@/lib/agent/config";
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 export const runtime = "nodejs";
 
 const IMAGE_MIME_TYPES = [
@@ -148,6 +148,8 @@ const openrouter = createOpenRouter({
 
 const MAX_ATTEMPTS = 4;
 
+const STALL_TIMEOUT = 45_000;
+
 const encoder = new TextEncoder();
 
 async function readWithTimeout(
@@ -222,14 +224,12 @@ function buildRetryingResponse(
         controller.enqueue(encoder.encode(text));
 
       let rateLimit: { resetAt: number } | null = null;
-      const deadline = Date.now() + 24000;
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         if (abort.signal.aborted) {
           controller.close();
           return;
         }
-        if (Date.now() > deadline) break;
 
         let resolveError: ((err: unknown) => void) | null = null;
         const errorSignal = new Promise<unknown>((resolve) => {
@@ -282,10 +282,7 @@ function buildRetryingResponse(
           let pending = "";
 
           outer: while (true) {
-            const frame = await readWithTimeout(
-              reader!,
-              Math.max(0, deadline - Date.now())
-            );
+            const frame = await readWithTimeout(reader!, STALL_TIMEOUT);
             if (frame === null) {
               stalled = true;
               await reader?.cancel().catch(() => {});
@@ -356,6 +353,7 @@ function buildRetryingResponse(
         if (stalled && committed) forcedEarly = true;
 
         if (rateLimit) break;
+        if (stalled && !committed) break;
 
         if (forcedEarly) {
           enqueueText(
