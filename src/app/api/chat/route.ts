@@ -28,6 +28,10 @@ type RawMessage = {
   parts?: RawPart[];
 };
 
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+type ExtractResult = { ok: true; text: string } | { ok: false; reason: string };
+
 function decodeDataUrl(data: string): Buffer | null {
   if (!data.startsWith("data:")) return null;
   const comma = data.indexOf(",");
@@ -41,24 +45,34 @@ function dataUrlOf(part: RawPart): string | undefined {
   return part.data ?? part.url;
 }
 
-async function extractTextFile(part: RawPart): Promise<string | null> {
+async function extractTextFile(part: RawPart): Promise<ExtractResult> {
   const source = dataUrlOf(part);
-  if (!source) return null;
+  if (!source) return { ok: false, reason: "could not read content" };
   const buffer = decodeDataUrl(source);
-  if (!buffer) return null;
+  if (!buffer || buffer.byteLength === 0) {
+    return { ok: false, reason: "could not read content" };
+  }
+  if (buffer.byteLength > MAX_FILE_BYTES) {
+    return { ok: false, reason: "file is too large to process" };
+  }
 
   const mime = (part.mediaType ?? part.mimeType ?? "").toLowerCase();
 
   try {
     if (mime === "text/plain" || mime === "text/csv" || mime === "application/json") {
-      return buffer.toString("utf8");
+      return { ok: true, text: buffer.toString("utf8") };
     }
     if (mime === "application/pdf") {
       const { PDFParse } = await import("pdf-parse");
       const parser = new PDFParse({ data: buffer });
       try {
         const result = await parser.getText();
-        return result.text?.trim() || null;
+        const text = result.text?.trim();
+        if (text) return { ok: true, text };
+        return {
+          ok: false,
+          reason: "no readable text — the PDF appears to be scanned or image-based",
+        };
       } finally {
         await parser.destroy().catch(() => {});
       }
@@ -70,12 +84,14 @@ async function extractTextFile(part: RawPart): Promise<string | null> {
       const mod = await import("mammoth");
       const mammoth = (mod as { default?: typeof import("mammoth") }).default ?? mod;
       const result = await mammoth.extractRawText({ buffer });
-      return result.value?.trim() || null;
+      const text = result.value?.trim();
+      if (text) return { ok: true, text };
+      return { ok: false, reason: "no readable text in the document" };
     }
   } catch {
-    return null;
+    return { ok: false, reason: "could not be parsed" };
   }
-  return null;
+  return { ok: false, reason: "unsupported file type" };
 }
 
 async function toCoreMessages(rawMessages: RawMessage[]): Promise<CoreMessage[]> {
@@ -118,7 +134,14 @@ async function toCoreMessages(rawMessages: RawMessage[]): Promise<CoreMessage[]>
         if (IMAGE_MIME_TYPES.includes(mime)) {
           flushText();
           if (source?.startsWith("data:")) {
-            blocks.push({ type: "image", image: source });
+            const buffer = decodeDataUrl(source);
+            if (buffer && buffer.byteLength > MAX_FILE_BYTES) {
+              pendingText.push(
+                `\n\n[Attachment: ${label}] (file is too large to process)`
+              );
+            } else {
+              blocks.push({ type: "image", image: source });
+            }
           } else {
             pendingText.push(
               `\n\n[Attachment: ${label}] (could not read content)`
@@ -127,9 +150,9 @@ async function toCoreMessages(rawMessages: RawMessage[]): Promise<CoreMessage[]>
         } else {
           const extracted = await extractTextFile(part);
           pendingText.push(
-            extracted
-              ? `\n\n[Attachment: ${label}]\n${extracted}`
-              : `\n\n[Attachment: ${label}] (could not read content)`
+            extracted.ok
+              ? `\n\n[Attachment: ${label}]\n${extracted.text}`
+              : `\n\n[Attachment: ${label}] (${extracted.reason})`
           );
         }
       }

@@ -27,6 +27,8 @@ const ACCEPT_ATTR = ACCEPTED_TYPES.join(",");
 
 export const MAX_ATTACHMENTS = 5;
 
+const MAX_NON_IMAGE_BYTES = 3_000_000;
+
 type ChatInputProps = {
   value: string;
   onChange: (value: string) => void;
@@ -76,6 +78,10 @@ export function ChatInput({
         continue;
       }
       if (next.length >= MAX_ATTACHMENTS) {
+        rejected.push(file.name);
+        continue;
+      }
+      if (!file.type.startsWith("image/") && file.size > MAX_NON_IMAGE_BYTES) {
         rejected.push(file.name);
         continue;
       }
@@ -153,7 +159,7 @@ export function ChatInput({
                   ? ` +${rejectedFiles.length - 2} more`
                   : "")}
             {" "}Accepted: PDF, DOCX, TXT, CSV, or images (JPG, PNG, WebP, GIF) up to{" "}
-            {MAX_ATTACHMENTS} files.
+            {MAX_ATTACHMENTS} files — documents up to 3 MB; photos auto-compress.
           </span>
         </div>
       )}

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { MessageList, type DisplayMessage } from "@/components/MessageList";
 import { ChatInput } from "@/components/ChatInput";
+import { prepareFilesForSend } from "@/lib/client-files";
 import {
   UsageBadge,
   type TokenUsage,
@@ -486,17 +487,20 @@ export default function ChatPage() {
               onChange={setInput}
 onSend={() => {
                   if ((!input.trim() && files.length === 0) || isStreaming) return;
-                  quietlySwallow(
-                    sendMessage(
-                      { text: input, files: toFileList(files) },
-                      {
-                        body: {
-                          userName: name.trim() || undefined,
-                          division,
-                        },
-                      }
-                    )
-                  );
+                  void (async () => {
+                    const prepared = await prepareFilesForSend(files);
+                    quietlySwallow(
+                      sendMessage(
+                        { text: input, files: toFileList(prepared) },
+                        {
+                          body: {
+                            userName: name.trim() || undefined,
+                            division,
+                          },
+                        }
+                      )
+                    );
+                  })();
                   setInput("");
                   setFiles([]);
                 }}
